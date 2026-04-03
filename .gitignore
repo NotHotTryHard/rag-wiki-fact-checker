@@ -3,6 +3,13 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+data/datasets/*
+data/chunks/*
+data/indices/*
+!data/datasets/.gitkeep
+!data/chunks/.gitkeep
+!data/indices/.gitkeep
+
 # C extensions
 *.so
 
