@@ -9,19 +9,23 @@ DB_PATH = os.path.join(DATA_DIR, "chunks", "wiki_en.db")
 CHUNK_SIZE = 200
 OVERLAP = 50
 
-EMBEDDER = "microsoft/harrier-oss-v1-0.6b"
+EMBEDDER = "microsoft/harrier-oss-v1-270m"
 QUERY_PROMPT = "web_search_query"
 
 EMBEDDER_TAG = EMBEDDER.rsplit("/", 1)[-1]
+EMBEDDINGS_DIR = os.path.join(DATA_DIR, "embeddings", EMBEDDER_TAG)
 INDICES_DIR = os.path.join(DATA_DIR, "indices", EMBEDDER_TAG)
 
-TRAIN_SIZE = 100000
-ENCODE_BATCH = 256
+TRAIN_SIZE = 200_000
+ENCODE_BATCH = 1024
 
 PQ_VARIANTS = {
     "PQ64": "IVF4096,PQ64",
+    "PQ80": "IVF4096,PQ80",
     "PQ128": "IVF4096,PQ128",
+    "PQ160": "IVF4096,PQ160",
     "PQ256": "IVF4096,PQ256",
+    "PQ320": "IVF4096,PQ320",
 }
 
 NPROBE = 32

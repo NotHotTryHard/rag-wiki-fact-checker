@@ -6,9 +6,11 @@ __pycache__/
 data/datasets/*
 data/chunks/*
 data/indices/*
+data/embeddings/*
 !data/datasets/.gitkeep
 !data/chunks/.gitkeep
 !data/indices/.gitkeep
+!data/embeddings/.gitkeep
 
 # C extensions
 *.so
