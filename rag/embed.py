@@ -1,10 +1,10 @@
 """Embed chunks in parallel by shards. Each GPU processes its own shard.
 
 Usage:
-    python rag/embed.py --gpu 0 --shard 0/4
-    python rag/embed.py --gpu 1 --shard 1/4
-    python rag/embed.py --gpu 2 --shard 2/4
-    python rag/embed.py --gpu 3 --shard 3/4
+    python rag/embed.py --gpu 4 --shard 1/4
+    python rag/embed.py --gpu 5 --shard 2/4
+    python rag/embed.py --gpu 6 --shard 3/4
+    python rag/embed.py --gpu 7 --shard 4/4
 """
 
 import os
@@ -21,7 +21,8 @@ args, device = parse_gpu_args(extra_args=[
 ])
 
 k, n = map(int, args.shard.split("/"))
-print(f"Device: {device} | Shard {k}/{n}")
+k -= 1  # 1-based input → 0-based for modulo
+print(f"Device: {device} | Shard {k+1}/{n}")
 
 os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
 
