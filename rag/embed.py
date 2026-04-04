@@ -14,7 +14,7 @@ import torch
 from tqdm import tqdm
 from safetensors.numpy import save_file
 from sentence_transformers import SentenceTransformer
-from config import DB_PATH, EMBEDDER, EMBEDDINGS_DIR, ENCODE_BATCH, parse_gpu_args
+from config import DB_PATH, EMBEDDER, EMBEDDINGS_DIR, ENCODE_BATCH, MAX_TOKENS_PER_BATCH,parse_gpu_args
 
 args, device = parse_gpu_args(extra_args=[
     (["--shard"], {"type": str, "required": True, "help": "Shard K/N, e.g. 1/4"}),
@@ -47,22 +47,27 @@ conn.close()
 total = len(rows)
 print(f"Shard {k+1}: {total:,} chunks")
 
+rows.sort(key=lambda r: len(r[1]))
+
 all_ids = np.array([r[0] for r in rows], dtype=np.int64)
 all_vecs = np.empty((total, dim), dtype=np.float32)
 
 pbar = tqdm(total=total, desc=f"Shard {k+1} embed")
-for start in range(0, total, ENCODE_BATCH):
-    end = min(start + ENCODE_BATCH, total)
+start = 0
+while start < total:
+    # приближение: берём самый длинный потенциальный конец батча
+    max_len = max(1, len(rows[min(start + MAX_TOKENS_PER_BATCH, total) - 1][1]))
+    batch_size = max(1, MAX_TOKENS_PER_BATCH * 4 // max_len)  # 4 символа ≈ 1 токен
+    end = min(start + batch_size, total)
+
     texts = [rows[i][1] for i in range(start, end)]
     vecs = model.encode(
-        texts, batch_size=ENCODE_BATCH, normalize_embeddings=True,
+        texts, batch_size=len(texts), normalize_embeddings=True,
     ).astype(np.float32)
+
     all_vecs[start:end] = vecs
-    del vecs, texts
-    if device == "cuda":
-        torch.cuda.empty_cache()
     pbar.update(end - start)
-pbar.close()
+    start = end
 
 save_file({"vecs": all_vecs, "ids": all_ids}, shard_path)
 print(f"Saved {shard_path} ({os.path.getsize(shard_path) / 1e9:.1f} GB)")
