@@ -53,6 +53,13 @@ else:
         step = max(1, len(vecs) // per_shard)
         train_parts.append(vecs[::step][:per_shard])
     train_vecs = np.concatenate(train_parts)[:TRAIN_SIZE]
+
+    bad_mask = ~np.isfinite(train_vecs).all(axis=1)
+    n_bad = bad_mask.sum()
+    if n_bad:
+        print(f"Dropping {n_bad:,} vectors with NaN/Inf")
+        train_vecs = train_vecs[~bad_mask]
+
     print(f"Training {name} ({factory}) on {len(train_vecs):,} vectors ...")
 
     index = faiss.index_factory(dim, factory, faiss.METRIC_INNER_PRODUCT)
