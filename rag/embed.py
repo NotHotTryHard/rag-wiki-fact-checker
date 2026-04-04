@@ -33,7 +33,7 @@ if os.path.exists(shard_path):
     exit(0)
 
 model = SentenceTransformer(
-    EMBEDDER, device=device, model_kwargs={"torch_dtype": torch.float16}
+    EMBEDDER, device=device, model_kwargs={"torch_dtype": torch.bfloat16}
 )
 dim = model.get_sentence_embedding_dimension()
 print(f"Embedder dim: {dim}")
