@@ -17,7 +17,7 @@ from sentence_transformers import SentenceTransformer
 from config import DB_PATH, EMBEDDER, EMBEDDINGS_DIR, ENCODE_BATCH, parse_gpu_args
 
 args, device = parse_gpu_args(extra_args=[
-    (["--shard"], {"type": str, "required": True, "help": "Shard K/N, e.g. 0/4"}),
+    (["--shard"], {"type": str, "required": True, "help": "Shard K/N, e.g. 1/4"}),
 ])
 
 k, n = map(int, args.shard.split("/"))
@@ -45,12 +45,12 @@ rows = conn.execute(
 conn.close()
 
 total = len(rows)
-print(f"Shard {k}: {total:,} chunks")
+print(f"Shard {k+1}: {total:,} chunks")
 
 all_ids = np.array([r[0] for r in rows], dtype=np.int64)
 all_vecs = np.empty((total, dim), dtype=np.float32)
 
-pbar = tqdm(total=total, desc=f"Shard {k} embed")
+pbar = tqdm(total=total, desc=f"Shard {k+1} embed")
 for start in range(0, total, ENCODE_BATCH):
     end = min(start + ENCODE_BATCH, total)
     texts = [rows[i][1] for i in range(start, end)]
@@ -58,6 +58,9 @@ for start in range(0, total, ENCODE_BATCH):
         texts, batch_size=ENCODE_BATCH, normalize_embeddings=True,
     ).astype(np.float32)
     all_vecs[start:end] = vecs
+    del vecs, texts
+    if device == "cuda":
+        torch.cuda.empty_cache()
     pbar.update(end - start)
 pbar.close()
 
