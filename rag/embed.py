@@ -53,6 +53,7 @@ all_ids = np.array([r[0] for r in rows], dtype=np.int64)
 all_vecs = np.empty((total, dim), dtype=np.float32)
 
 pbar = tqdm(total=total, desc=f"Shard {k+1} embed")
+n_bad = 0
 start = 0
 while start < total:
     # приближение: берём самый длинный потенциальный конец батча
@@ -62,12 +63,24 @@ while start < total:
 
     texts = [rows[i][1] for i in range(start, end)]
     vecs = model.encode(
-        texts, batch_size=len(texts), normalize_embeddings=True,
+        texts, batch_size=len(texts), normalize_embeddings=False,
     ).astype(np.float32)
+
+    batch_bad = (~np.isfinite(vecs)).any(axis=1).sum()
+    n_bad += batch_bad
+    if batch_bad:
+        pbar.write(f"  batch {start}-{end}: {batch_bad} NaN/Inf vectors (before norm)")
+
+    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+    norms = np.maximum(norms, 1e-12)
+    vecs /= norms
 
     all_vecs[start:end] = vecs
     pbar.update(end - start)
     start = end
+
+if n_bad:
+    print(f"WARNING: {n_bad:,} vectors had NaN/Inf before normalization")
 
 save_file({"vecs": all_vecs, "ids": all_ids}, shard_path)
 print(f"Saved {shard_path} ({os.path.getsize(shard_path) / 1e9:.1f} GB)")
