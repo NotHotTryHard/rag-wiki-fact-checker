@@ -44,10 +44,11 @@ if not loaded:
     exit(1)
 
 # load fever dataset
-fever = load_from_disk(FEVER_DIR)
+fever_ds = load_from_disk(FEVER_DIR)
+fever = fever_ds["validation"] if isinstance(fever_ds, dict) else fever_ds
 claims = [
     ex for ex in fever
-    if ex["label"] != "NOT ENOUGH INFO" and ex["evidence_wiki_url"]
+    if ex["label"] != "NOT ENOUGH INFO" and ex.get("evidence_wiki_url")
 ]
 print(f"FEVER claims with evidence: {len(claims)}")
 
