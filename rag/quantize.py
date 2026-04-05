@@ -2,6 +2,7 @@
 
 Usage:
     python rag/quantize.py --pq PQ160
+    python rag/quantize.py --pq PQ160 --gpu 0
 """
 
 import os
@@ -18,7 +19,17 @@ import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--pq", choices=list(PQ_VARIANTS), required=True)
+parser.add_argument("--gpu", type=int, default=None, help="GPU index for faiss-gpu (omit for CPU)")
 args = parser.parse_args()
+
+use_gpu = False
+if args.gpu is not None:
+    try:
+        res = faiss.StandardGpuResources()
+        use_gpu = True
+        print(f"Using GPU {args.gpu}")
+    except AttributeError:
+        print("faiss-gpu not available, falling back to CPU")
 
 name = args.pq
 factory = PQ_VARIANTS[name]
@@ -63,7 +74,13 @@ else:
     print(f"Training {name} ({factory}) on {len(train_vecs):,} vectors ...")
 
     index = faiss.index_factory(dim, factory, faiss.METRIC_INNER_PRODUCT)
-    index.train(train_vecs)
+    if use_gpu:
+        gpu_index = faiss.index_cpu_to_gpu(res, args.gpu, index)
+        gpu_index.train(train_vecs)
+        index = faiss.index_gpu_to_cpu(gpu_index)
+        del gpu_index
+    else:
+        index.train(train_vecs)
     faiss.write_index(index, ckpt)
     print(f"Trained index saved to {ckpt}")
     del train_vecs
