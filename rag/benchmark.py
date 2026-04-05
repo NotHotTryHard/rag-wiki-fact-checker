@@ -24,7 +24,7 @@ args, device = parse_gpu_args()
 print(f"Device: {device}")
 
 model = SentenceTransformer(
-    EMBEDDER, device=device, model_kwargs={"torch_dtype": torch.float16}
+    EMBEDDER, device=device, model_kwargs={"dtype": "auto"}
 )
 dim = model.get_sentence_embedding_dimension()
 
