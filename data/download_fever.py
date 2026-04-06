@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "rag"))
 
 from datasets import load_dataset, DatasetDict
-from config import DATA_DIR
+from rag_config import DATA_DIR
 
 fever_dir = os.path.join(DATA_DIR, "datasets", "fever")
 
