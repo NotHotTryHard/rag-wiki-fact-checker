@@ -18,6 +18,9 @@ from model import FactChecker
 args, device = parse_gpu_args()
 print(f"Device: {device}")
 
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
 index = faiss.read_index(faiss_path(PQ_NAME))
 faiss.extract_index_ivf(index).nprobe = NPROBE
 print(f"FAISS index: {index.ntotal:,} vectors")
@@ -32,6 +35,7 @@ test_dl = DataLoader(test_ds, batch_size=BATCH_SIZE, **dl_kwargs)
 model = FactChecker(MODEL_NAME, NUM_LABELS).to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
 criterion = nn.CrossEntropyLoss()
+scaler = torch.amp.GradScaler("cuda", enabled=(device == "cuda"))
 
 history = {"train_loss_steps": [], "val_loss": [], "val_acc": []}
 
@@ -49,15 +53,17 @@ for epoch in range(EPOCHS):
         input_ids = input_ids.to(device)
         attention_mask = attention_mask.to(device)
         labels = labels.to(device)
-        logits = model(input_ids, attention_mask)
-        loss = criterion(logits, labels)
+        with torch.amp.autocast("cuda", enabled=(device == "cuda")):
+            logits = model(input_ids, attention_mask)
+            loss = criterion(logits, labels)
         sync()
         t_fwd += time.perf_counter() - t0
 
         t0 = time.perf_counter()
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
         sync()
         t_bwd += time.perf_counter() - t0
 
@@ -85,8 +91,9 @@ for epoch in range(EPOCHS):
             attention_mask = attention_mask.to(device)
             labels = labels.to(device)
 
-            logits = model(input_ids, attention_mask)
-            val_loss += criterion(logits, labels).item()
+            with torch.amp.autocast("cuda", enabled=(device == "cuda")):
+                logits = model(input_ids, attention_mask)
+                val_loss += criterion(logits, labels).item()
             correct += (logits.argmax(dim=-1) == labels).sum().item()
             total += labels.size(0)
 
