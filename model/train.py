@@ -15,8 +15,11 @@ from model_config import MODEL_NAME, PQ_NAME, MAX_LENGTH, LR, EPOCHS, BATCH_SIZE
 from dataset import ClaimDataset, collate_fn
 from model import FactChecker
 
-args, device = parse_gpu_args()
-print(f"Device: {device}")
+args, device = parse_gpu_args(extra_args=[
+    (["--profile"], {"action": "store_true", "help": "Enable per-step timing (adds cuda.synchronize overhead)"}),
+])
+PROFILE = args.profile
+print(f"Device: {device}  profile: {PROFILE}")
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -43,41 +46,48 @@ for epoch in range(EPOCHS):
     model.train()
     total_loss = 0
     pbar = tqdm(train_dl, desc=f"Epoch {epoch+1}/{EPOCHS} [train]")
-    t_data, t_fwd, t_bwd, t_log = 0, 0, 0, 0
-    sync = torch.cuda.synchronize if device == "cuda" else lambda: None
-    t0 = time.perf_counter()
-    for input_ids, attention_mask, labels in pbar:
-        t_data += time.perf_counter() - t0
-
+    if PROFILE:
+        t_data, t_fwd, t_bwd = 0, 0, 0
+        sync = torch.cuda.synchronize if device == "cuda" else lambda: None
         t0 = time.perf_counter()
+    for input_ids, attention_mask, labels in pbar:
+        if PROFILE:
+            t_data += time.perf_counter() - t0
+            t0 = time.perf_counter()
+
         input_ids = input_ids.to(device)
         attention_mask = attention_mask.to(device)
         labels = labels.to(device)
         with torch.amp.autocast("cuda", enabled=(device == "cuda")):
             logits = model(input_ids, attention_mask)
             loss = criterion(logits, labels)
-        sync()
-        t_fwd += time.perf_counter() - t0
 
-        t0 = time.perf_counter()
+        if PROFILE:
+            sync()
+            t_fwd += time.perf_counter() - t0
+            t0 = time.perf_counter()
+
         optimizer.zero_grad()
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
-        sync()
-        t_bwd += time.perf_counter() - t0
 
-        t0 = time.perf_counter()
+        if PROFILE:
+            sync()
+            t_bwd += time.perf_counter() - t0
+
         total_loss += loss.item()
         history["train_loss_steps"].append(loss.item())
         avg = total_loss / (pbar.n + 1)
         n = pbar.n + 1
-        pbar.set_description(
-            f"Epoch {epoch+1}/{EPOCHS} loss={avg:.4f} "
-            f"data={t_data/n:.3f}s fwd={t_fwd/n:.3f}s bwd={t_bwd/n:.3f}s log={t_log/n:.3f}s"
-        )
-        t_log += time.perf_counter() - t0
-        t0 = time.perf_counter()
+        if PROFILE:
+            pbar.set_description(
+                f"Epoch {epoch+1}/{EPOCHS} loss={avg:.4f} "
+                f"data={t_data/n:.3f}s fwd={t_fwd/n:.3f}s bwd={t_bwd/n:.3f}s"
+            )
+            t0 = time.perf_counter()
+        else:
+            pbar.set_description(f"Epoch {epoch+1}/{EPOCHS} loss={avg:.4f}")
 
     avg_train_loss = total_loss / len(train_dl)
 
