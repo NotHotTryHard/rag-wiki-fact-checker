@@ -17,9 +17,19 @@ from model import FactChecker
 
 args, device = parse_gpu_args(extra_args=[
     (["--profile"], {"action": "store_true", "help": "Enable per-step timing (adds cuda.synchronize overhead)"}),
+    (["--model"], {"type": str, "default": MODEL_NAME, "help": "HF model name"}),
+    (["--pq"], {"type": str, "default": PQ_NAME, "help": "PQ variant name"}),
 ])
+MODEL_NAME = args.model
+PQ_NAME = args.pq
 PROFILE = args.profile
-print(f"Device: {device}  profile: {PROFILE}")
+
+model_tag = MODEL_NAME.rsplit("/", 1)[-1]
+run_name = f"{model_tag}__{PQ_NAME}"
+run_dir = os.path.join("checkpoints", run_name)
+os.makedirs(run_dir, exist_ok=True)
+
+print(f"Device: {device}  model: {MODEL_NAME}  pq: {PQ_NAME}  run: {run_name}")
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -114,9 +124,8 @@ for epoch in range(EPOCHS):
     history["val_acc"].append(accuracy)
     print(f"Epoch {epoch+1}: train_loss={avg_train_loss:.4f}  val_loss={avg_val_loss:.4f}  val_acc={accuracy:.4f}")
 
-os.makedirs("checkpoints", exist_ok=True)
-torch.save(model.state_dict(), "checkpoints/fact_checker.pt")
-print("Saved to checkpoints/fact_checker.pt")
+torch.save(model.state_dict(), os.path.join(run_dir, "model.pt"))
+print(f"Saved to {run_dir}/model.pt")
 
 # plot
 epochs_range = range(1, EPOCHS + 1)
@@ -138,5 +147,5 @@ ax2.legend()
 ax2.set_title("Val Accuracy")
 
 plt.tight_layout()
-plt.savefig("checkpoints/training_curves.png", dpi=150)
-print("Plot saved to checkpoints/training_curves.png")
+plt.savefig(os.path.join(run_dir, "training_curves.png"), dpi=150)
+print(f"Plot saved to {run_dir}/training_curves.png")
