@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import faiss
 import matplotlib.pyplot as plt
+import time
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "rag"))
 from rag_config import faiss_path, NPROBE, parse_gpu_args
@@ -38,22 +39,34 @@ for epoch in range(EPOCHS):
     model.train()
     total_loss = 0
     pbar = tqdm(train_dl, desc=f"Epoch {epoch+1}/{EPOCHS} [train]")
+    t_data, t_fwd, t_bwd = 0, 0, 0
+    t0 = time.perf_counter()
     for input_ids, attention_mask, labels in pbar:
+        t_data += time.perf_counter() - t0
+
+        t0 = time.perf_counter()
         input_ids = input_ids.to(device)
         attention_mask = attention_mask.to(device)
         labels = labels.to(device)
-
         logits = model(input_ids, attention_mask)
         loss = criterion(logits, labels)
+        t_fwd += time.perf_counter() - t0
 
+        t0 = time.perf_counter()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        t_bwd += time.perf_counter() - t0
 
         total_loss += loss.item()
         history["train_loss_steps"].append(loss.item())
         avg = total_loss / (pbar.n + 1)
-        pbar.set_description(f"Epoch {epoch+1}/{EPOCHS} [train] loss={avg:.4f}")
+        n = pbar.n + 1
+        pbar.set_description(
+            f"Epoch {epoch+1}/{EPOCHS} loss={avg:.4f} "
+            f"data={t_data/n:.3f}s fwd={t_fwd/n:.3f}s bwd={t_bwd/n:.3f}s"
+        )
+        t0 = time.perf_counter()
 
     avg_train_loss = total_loss / len(train_dl)
 
