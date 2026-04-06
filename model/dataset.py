@@ -57,7 +57,13 @@ class ClaimDataset(Dataset):
         self.claims, self.embeddings = fever_embeddings(split, device, ENCODE_BATCH)
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         self.search_index = search_index
-        self.conn = sqlite3.connect(DB_PATH)
+        self._conn = None
+
+    @property
+    def conn(self):
+        if self._conn is None:
+            self._conn = sqlite3.connect(DB_PATH)
+        return self._conn
 
     def __len__(self):
         return len(self.claims)

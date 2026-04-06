@@ -9,7 +9,7 @@ import faiss
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "rag"))
 from rag_config import faiss_path, NPROBE, parse_gpu_args
 
-from model_config import MODEL_NAME, PQ_NAME, MAX_LENGTH, LR, EPOCHS, BATCH_SIZE, NUM_LABELS, TOP_K
+from model_config import MODEL_NAME, PQ_NAME, MAX_LENGTH, LR, EPOCHS, BATCH_SIZE, NUM_LABELS, TOP_K, NUM_WORKERS, PREFETCH
 from dataset import ClaimDataset
 from model import FactChecker
 
@@ -23,8 +23,9 @@ print(f"FAISS index: {index.ntotal:,} vectors")
 train_ds = ClaimDataset("train", MODEL_NAME, index, TOP_K, MAX_LENGTH, device)
 test_ds = ClaimDataset("test", MODEL_NAME, index, TOP_K, MAX_LENGTH, device)
 
-train_dl = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
-test_dl = DataLoader(test_ds, batch_size=BATCH_SIZE)
+dl_kwargs = dict(num_workers=NUM_WORKERS, prefetch_factor=PREFETCH, persistent_workers=True)
+train_dl = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, **dl_kwargs)
+test_dl = DataLoader(test_ds, batch_size=BATCH_SIZE, **dl_kwargs)
 
 model = FactChecker(MODEL_NAME, NUM_LABELS).to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
