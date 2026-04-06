@@ -27,7 +27,4 @@ class FactChecker(nn.Module):
         # max-pool over K evidences
         pooled = logits.max(dim=1).values        # (B, num_labels)
 
-        # truthfulness = p_sup / (p_sup + p_ref)
-        probs = pooled.softmax(dim=-1)
-        truthfulness = probs[:, 0] / (probs[:, 0] + probs[:, 1])
-        return truthfulness, pooled
+        return pooled
