@@ -1,10 +1,10 @@
-MODEL_NAME = "bert-base-uncased"
+MODEL_NAME = 'bert-base-uncased' # 'microsoft/deberta-v3-base' # 'bert-base-uncased'
 PQ_NAME = "PQ256"
 MAX_LENGTH = 512
 
 LR = 2e-5
-EPOCHS = 3
-BATCH_SIZE = 16
+EPOCHS = 10
+BATCH_SIZE = 32
 NUM_LABELS = 3
 TOP_K = 5
 NUM_WORKERS = 4
