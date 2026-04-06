@@ -9,8 +9,8 @@ DB_PATH = os.path.join(DATA_DIR, "chunks", "wiki_en.db")
 CHUNK_SIZE = 200
 OVERLAP = 50
 
-#EMBEDDER = "microsoft/harrier-oss-v1-0.6b"
-EMBEDDER = "microsoft/harrier-oss-v1-270m"
+EMBEDDER = "microsoft/harrier-oss-v1-0.6b"
+#EMBEDDER = "microsoft/harrier-oss-v1-270m"
 QUERY_PROMPT = "web_search_query"
 
 EMBEDDER_TAG = EMBEDDER.rsplit("/", 1)[-1]
