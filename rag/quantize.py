@@ -11,7 +11,7 @@ import numpy as np
 import faiss
 from tqdm import tqdm
 from safetensors.numpy import load_file
-from config import (
+from rag_config import (
     EMBEDDINGS_DIR, INDICES_DIR, TRAIN_SIZE,
     PQ_VARIANTS, faiss_path, checkpoint_path,
 )

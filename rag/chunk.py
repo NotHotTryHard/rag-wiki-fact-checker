@@ -4,7 +4,7 @@ import os
 import sqlite3
 from datasets import load_from_disk
 from tqdm import tqdm
-from config import DATASET_DIR, DB_PATH, CHUNK_SIZE, OVERLAP
+from rag_config import DATASET_DIR, DB_PATH, CHUNK_SIZE, OVERLAP
 
 ds = load_from_disk(DATASET_DIR)
 

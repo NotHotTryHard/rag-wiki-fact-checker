@@ -3,7 +3,7 @@
 import os, glob
 import numpy as np
 from safetensors.numpy import load_file
-from config import EMBEDDINGS_DIR
+from rag_config import EMBEDDINGS_DIR
 
 shard_files = sorted(glob.glob(os.path.join(EMBEDDINGS_DIR, "shard_*.safetensors")))
 total, total_bad = 0, 0

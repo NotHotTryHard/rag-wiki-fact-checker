@@ -17,7 +17,7 @@ from safetensors.numpy import load_file
 from huggingface_hub import HfApi
 
 sys.path.insert(0, os.path.dirname(__file__))
-from config import DATA_DIR, DB_PATH
+from rag_config import DATA_DIR, DB_PATH
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--embedder", required=True, help="Embedder tag, e.g. harrier-oss-v1-270m")

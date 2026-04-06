@@ -16,7 +16,7 @@ from datasets import load_from_disk
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
-from config import (
+from rag_config import (
     DATA_DIR, DB_PATH, EMBEDDER, QUERY_PROMPT,
     PQ_VARIANTS, NPROBE, faiss_path, parse_gpu_args,
 )

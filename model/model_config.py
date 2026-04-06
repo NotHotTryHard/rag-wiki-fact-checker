@@ -1,0 +1,8 @@
+MODEL_NAME = "bert-base-uncased"
+MAX_LENGTH = 512
+LR = 2e-5
+EPOCHS = 3
+BATCH_SIZE = 16
+NUM_LABELS = 3
+TOP_K = 5
+PQ_NAME = "PQ160"

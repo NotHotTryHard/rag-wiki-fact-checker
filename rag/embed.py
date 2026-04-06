@@ -14,7 +14,7 @@ import torch
 from tqdm import tqdm
 from safetensors.numpy import save_file
 from sentence_transformers import SentenceTransformer
-from config import DB_PATH, EMBEDDER, EMBEDDINGS_DIR, ENCODE_BATCH, MAX_TOKENS_PER_BATCH,parse_gpu_args
+from rag_config import DB_PATH, EMBEDDER, EMBEDDINGS_DIR, ENCODE_BATCH, MAX_TOKENS_PER_BATCH,parse_gpu_args
 
 args, device = parse_gpu_args(extra_args=[
     (["--shard"], {"type": str, "required": True, "help": "Shard K/N, e.g. 1/4"}),
