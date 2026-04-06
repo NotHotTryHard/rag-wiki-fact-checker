@@ -25,9 +25,11 @@ args, device = parse_gpu_args(extra_args=[
     (["--profile"], {"action": "store_true", "help": "Enable per-step timing (adds cuda.synchronize overhead)"}),
     (["--model"], {"type": str, "default": MODEL_NAME, "help": "HF model name"}),
     (["--pq"], {"type": str, "default": PQ_NAME, "help": "PQ variant name"}),
+    (["--batch"], {"type": int, "default": BATCH_SIZE, "help": "Batch size"}),
 ])
 MODEL_NAME = args.model
 PQ_NAME = args.pq
+BATCH_SIZE = args.batch
 PROFILE = args.profile
 
 model_tag = MODEL_NAME.rsplit("/", 1)[-1]
@@ -47,16 +49,19 @@ print(f"FAISS index: {index.ntotal:,} vectors")
 train_ds = ClaimDataset("train", MODEL_NAME, index, TOP_K, MAX_LENGTH, device)
 test_ds = ClaimDataset("test", MODEL_NAME, index, TOP_K, MAX_LENGTH, device)
 
-dl_kwargs = dict(num_workers=NUM_WORKERS, prefetch_factor=PREFETCH, persistent_workers=True, collate_fn=collate_fn)
+dl_kwargs = dict(collate_fn=collate_fn)
+if NUM_WORKERS > 0:
+    dl_kwargs.update(num_workers=NUM_WORKERS, prefetch_factor=PREFETCH, persistent_workers=True)
 train_dl = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, **dl_kwargs)
 test_dl = DataLoader(test_ds, batch_size=BATCH_SIZE, **dl_kwargs)
 
-model = FactChecker(MODEL_NAME, NUM_LABELS).to(device)
+model = FactChecker(MODEL_NAME, NUM_LABELS).float().to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
 criterion = nn.CrossEntropyLoss()
 scaler = torch.amp.GradScaler("cuda", enabled=(device == "cuda"))
 
 history = {"train_loss_steps": [], "val_loss": [], "val_acc": []}
+best_val_loss = float("inf")
 
 for epoch in range(EPOCHS):
     model.train()
@@ -130,28 +135,37 @@ for epoch in range(EPOCHS):
     history["val_acc"].append(accuracy)
     print(f"Epoch {epoch+1}: train_loss={avg_train_loss:.4f}  val_loss={avg_val_loss:.4f}  val_acc={accuracy:.4f}")
 
-torch.save(model.state_dict(), os.path.join(run_dir, "model.pt"))
-print(f"Saved to {run_dir}/model.pt")
+    # save last
+    torch.save(model.state_dict(), os.path.join(run_dir, "last.pt"))
 
-# plot
-epochs_range = range(1, EPOCHS + 1)
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+    # save best
+    if avg_val_loss < best_val_loss:
+        best_val_loss = avg_val_loss
+        torch.save(model.state_dict(), os.path.join(run_dir, "best.pt"))
+        print(f"  New best model (val_loss={best_val_loss:.4f})")
 
-ax1.plot(history["train_loss_steps"], alpha=0.3, label="train (step)")
-steps_per_epoch = len(train_dl)
-val_x = [(i + 1) * steps_per_epoch - 1 for i in range(EPOCHS)]
-ax1.plot(val_x, history["val_loss"], marker="o", label="val (epoch)")
-ax1.set_xlabel("Step")
-ax1.set_ylabel("Loss")
-ax1.legend()
-ax1.set_title("Loss")
+    # plot after each epoch
+    epochs_range = range(1, epoch + 2)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
-ax2.plot(epochs_range, history["val_acc"], label="val accuracy")
-ax2.set_xlabel("Epoch")
-ax2.set_ylabel("Accuracy")
-ax2.legend()
-ax2.set_title("Val Accuracy")
+    ax1.plot(history["train_loss_steps"], alpha=0.3, label="train (step)")
+    steps_per_epoch = len(train_dl)
+    val_x = [(i + 1) * steps_per_epoch - 1 for i in range(epoch + 1)]
+    ax1.plot(val_x, history["val_loss"], marker="o", label="val (epoch)")
+    ax1.set_xlabel("Step")
+    ax1.set_ylabel("Loss")
+    ax1.legend()
+    ax1.set_title("Loss")
 
-plt.tight_layout()
-plt.savefig(os.path.join(run_dir, "training_curves.png"), dpi=150)
-print(f"Plot saved to {run_dir}/training_curves.png")
+    ax2.plot(epochs_range, history["val_acc"], marker="o", label="val accuracy")
+    ax2.set_xlabel("Epoch")
+    ax2.set_ylabel("Accuracy")
+    ax2.legend()
+    ax2.set_title("Val Accuracy")
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(run_dir, "training_curves.png"), dpi=150)
+    plt.close()
+
+print(f"Done. Best val_loss={best_val_loss:.4f}. Checkpoints in {run_dir}/")
+
