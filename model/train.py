@@ -1,3 +1,9 @@
+'''
+  python model/train.py --gpu 4 --model bert-base-uncased --pq PQ128
+  python model/train.py --gpu 5 --model microsoft/deberta-v3-base --pq PQ128
+  python model/train.py --gpu 6 --model microsoft/deberta-v3-base --pq PQ256
+  python model/train.py --gpu 7 --model microsoft/deberta-v3-large --pq PQ256
+'''
 import os
 import sys
 import torch
