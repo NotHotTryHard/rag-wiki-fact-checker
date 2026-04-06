@@ -4,13 +4,11 @@ from datasets import load_from_disk, concatenate_datasets
 from sentence_transformers import SentenceTransformer
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
-import torch
-import faiss
 import sqlite3
 
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "rag"))
-from rag_config import DATA_DIR, DB_PATH, EMBEDDER, EMBEDDER_TAG, QUERY_PROMPT, ENCODE_BATCH, faiss_path
+from rag_config import DATA_DIR, DB_PATH, EMBEDDER, EMBEDDER_TAG, QUERY_PROMPT, ENCODE_BATCH
 
 FEVER_DIR = os.path.join(DATA_DIR, "datasets", "fever")
 CACHE_DIR = os.path.join(DATA_DIR, "fever_embeddings", EMBEDDER_TAG)
@@ -48,21 +46,21 @@ def fever_embeddings(split="train", device="cpu", batch_size=128):
     return claims, embeddings
 
 
-
-
 LABEL2ID = {"SUPPORTS": 0, "REFUTES": 1, "NOT ENOUGH INFO": 2}
+
+
 class ClaimDataset(Dataset):
-    def __init__(self, split="train", tokenizer_name="bert-base-uncased", search_index=None, top_k=5, device="cpu"):
-        self.split = split
-        self.device = device
+    def __init__(self, split="train", tokenizer_name="bert-base-uncased",
+                 search_index=None, top_k=5, max_length=512, device="cpu"):
         self.top_k = top_k
-        self.claims, self.embeddings = fever_embeddings(self.split, self.device, ENCODE_BATCH)
+        self.max_length = max_length
+        self.claims, self.embeddings = fever_embeddings(split, device, ENCODE_BATCH)
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         self.search_index = search_index
         self.conn = sqlite3.connect(DB_PATH)
 
     def __len__(self):
-        return len(self.embeddings)
+        return len(self.claims)
 
     def __getitem__(self, idx):
         claim = self.claims[idx]
@@ -79,22 +77,17 @@ class ClaimDataset(Dataset):
             id_to_text = {r[0]: r[1] for r in rows}
             evidence_texts = [id_to_text.get(i, "") for i in chunk_ids]
 
-        # tokenize: [CLS] claim [SEP] ev1 [SEP] ev2 ... [SEP]
-        cl = self.tokenizer(claim["claim"], add_special_tokens=False, truncation=True, max_length=1024, return_tensors=None)["input_ids"]
-        ev_ids = []
-        for ev in evidence_texts:
-            ev_ids.append(self.tokenizer(ev, add_special_tokens=False, truncation=True, max_length=1024, return_tensors=None)["input_ids"])
+        while len(evidence_texts) < self.top_k:
+            evidence_texts.append("")
 
-        cls_id = self.tokenizer.cls_token_id
-        sep_id = self.tokenizer.sep_token_id
-
-        input_ids = [cls_id] + cl
-        for ev in ev_ids:
-            input_ids += [sep_id] + ev
-        input_ids += [sep_id]  # may be i will add distsm but not for now
+        pairs = self.tokenizer(
+            [claim["claim"]] * self.top_k,
+            evidence_texts,
+            truncation=True,
+            max_length=self.max_length,
+            padding="max_length",
+            return_tensors="pt",
+        ) # may be i will add distsm but not for now 
 
         label = LABEL2ID[claim["label"]]
-        return torch.tensor(input_ids), label
-
-
-
+        return pairs["input_ids"], pairs["attention_mask"], label
