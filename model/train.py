@@ -12,7 +12,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "..", "rag"))
 from rag_config import faiss_path, NPROBE, parse_gpu_args
 
 from model_config import MODEL_NAME, PQ_NAME, MAX_LENGTH, LR, EPOCHS, BATCH_SIZE, NUM_LABELS, TOP_K, NUM_WORKERS, PREFETCH
-from dataset import ClaimDataset
+from dataset import ClaimDataset, collate_fn
 from model import FactChecker
 
 args, device = parse_gpu_args()
@@ -25,7 +25,7 @@ print(f"FAISS index: {index.ntotal:,} vectors")
 train_ds = ClaimDataset("train", MODEL_NAME, index, TOP_K, MAX_LENGTH, device)
 test_ds = ClaimDataset("test", MODEL_NAME, index, TOP_K, MAX_LENGTH, device)
 
-dl_kwargs = dict(num_workers=NUM_WORKERS, prefetch_factor=PREFETCH, persistent_workers=True)
+dl_kwargs = dict(num_workers=NUM_WORKERS, prefetch_factor=PREFETCH, persistent_workers=True, collate_fn=collate_fn)
 train_dl = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, **dl_kwargs)
 test_dl = DataLoader(test_ds, batch_size=BATCH_SIZE, **dl_kwargs)
 

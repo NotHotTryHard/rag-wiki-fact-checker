@@ -91,9 +91,29 @@ class ClaimDataset(Dataset):
             evidence_texts,
             truncation=True,
             max_length=self.max_length,
-            padding="max_length",
-            return_tensors="pt",
-        ) # may be i will add distsm but not for now 
+            padding=False,
+        )  # may be i will add distsm but not for now
 
         label = LABEL2ID[claim["label"]]
         return pairs["input_ids"], pairs["attention_mask"], label
+
+
+def collate_fn(batch):
+    all_ids, all_masks, labels = zip(*batch)
+    # all_ids[i] is list of K variable-length lists
+    max_len = max(len(seq) for sample in all_ids for seq in sample)
+    pad_ids, pad_masks = [], []
+    for ids, masks in zip(all_ids, all_masks):
+        sample_ids, sample_masks = [], []
+        for seq_ids, seq_mask in zip(ids, masks):
+            pad_len = max_len - len(seq_ids)
+            sample_ids.append(seq_ids + [0] * pad_len)
+            sample_masks.append(seq_mask + [0] * pad_len)
+        pad_ids.append(sample_ids)
+        pad_masks.append(sample_masks)
+    import torch
+    return (
+        torch.tensor(pad_ids),
+        torch.tensor(pad_masks),
+        torch.tensor(labels),
+    )
