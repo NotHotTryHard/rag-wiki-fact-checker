@@ -4,6 +4,8 @@ sentence-transformers
 datasets
 faiss-cpu  # faiss-gpu for CUDA machines
 safetensors
+sentencepiece
+tiktoken
 numpy
 tqdm
 pandas
