@@ -28,3 +28,21 @@ class FactChecker(nn.Module):
         pooled = logits.max(dim=1).values        # (B, num_labels)
 
         return pooled
+
+
+class TruthfulnessSayer(nn.Module):
+    def __init__(self, model_name, num_labels=3, weights_path=None):
+        super().__init__()
+        self.fact_checker = FactChecker(model_name, num_labels)
+        if weights_path:
+            self.fact_checker.load_state_dict(torch.load(weights_path, map_location="cpu"))
+        self.fact_checker.eval()
+
+    @torch.no_grad()
+    def forward(self, input_ids, attention_mask):
+        logits = self.fact_checker(input_ids, attention_mask)
+        probs = logits.softmax(dim=-1)
+        
+        # truthfulness = p_supports / (p_supports + p_refutes)
+        truthfulness = probs[:, 0] / (probs[:, 0] + probs[:, 1])
+        return truthfulness

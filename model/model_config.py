@@ -1,5 +1,5 @@
 MODEL_NAME = "bert-base-uncased"
-PQ_NAME = "PQ160"
+PQ_NAME = "PQ256"
 MAX_LENGTH = 512
 
 LR = 2e-5
