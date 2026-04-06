@@ -22,7 +22,7 @@ def fever_embeddings(split="train", device="cpu", batch_size=128):
     elif split == 'test':
         fever = fever_ds['test']
 
-    claims = [claim for claim in fever]
+    claims = [claim for claim in fever if claim["label"] in LABEL2ID]
 
     cache_path = os.path.join(CACHE_DIR, f"{split}.npz")
     if os.path.exists(cache_path):
