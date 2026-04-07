@@ -16,14 +16,14 @@ from transformers import AutoTokenizer
 from sentence_transformers import SentenceTransformer
 from huggingface_hub import hf_hub_download                                                                                                                            
                                                                                                                                                                          
-REPO = "username/fact-checker-data"
+REPO = "NotHotTryHard/fact-checker-data"
 
 @st.cache_resource
 def load_all():
     weights = hf_hub_download(REPO, "best.pt", repo_type="dataset")                                                                                                    
     index_path = hf_hub_download(REPO, "PQ256.faiss", repo_type="dataset")                                                                                             
     db_path = hf_hub_download(REPO, "wiki_en.db", repo_type="dataset")
-    
+
     sayer = TruthfulnessSayer(MODEL_NAME, NUM_LABELS, weights)
     index = faiss.read_index(faiss_path(PQ_NAME))
     faiss.extract_index_ivf(index).nprobe = NPROBE
