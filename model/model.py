@@ -33,7 +33,7 @@ class FactChecker(nn.Module):
 class TruthfulnessSayer(nn.Module):
     def __init__(self, model_name, num_labels=3, weights_path=None):
         super().__init__()
-        self.fact_checker = FactChecker(model_name, num_labels)
+        self.fact_checker = FactChecker(model_name, num_labels).float()
         if weights_path:
             self.fact_checker.load_state_dict(torch.load(weights_path, map_location="cpu"))
         self.fact_checker.eval()
