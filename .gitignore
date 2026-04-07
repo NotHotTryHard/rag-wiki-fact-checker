@@ -7,10 +7,14 @@ data/datasets/*
 data/chunks/*
 data/indices/*
 data/embeddings/*
+data/fever_embeddings/*
+checkpoints/*
 !data/datasets/.gitkeep
 !data/chunks/.gitkeep
 !data/indices/.gitkeep
 !data/embeddings/.gitkeep
+!data/fever_embeddings/.gitkeep
+!checkpoints/.gitkeep
 
 # C extensions
 *.so
