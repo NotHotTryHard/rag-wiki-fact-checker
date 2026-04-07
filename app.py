@@ -20,14 +20,16 @@ REPO = "NotHotTryHard/fact-checker-data"
 
 @st.cache_resource
 def load_all():
-    weights = hf_hub_download(REPO, "best.pt", repo_type="dataset")                                                                                                    
-    index_path = hf_hub_download(REPO, "PQ256.faiss", repo_type="dataset")                                                                                             
+    weights = hf_hub_download(REPO, "best.pt", repo_type="dataset")
+    index_path = hf_hub_download(REPO, "PQ256.faiss", repo_type="dataset")
     db_path = hf_hub_download(REPO, "wiki_en.db", repo_type="dataset")
 
+    embedder = SentenceTransformer(EMBEDDER)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     sayer = TruthfulnessSayer(MODEL_NAME, NUM_LABELS, weights)
-    index = faiss.read_index(faiss_path(PQ_NAME))
+    index = faiss.read_index(index_path)
     faiss.extract_index_ivf(index).nprobe = NPROBE
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     return embedder, tokenizer, sayer, index, conn
 
 
