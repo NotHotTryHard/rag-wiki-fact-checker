@@ -14,13 +14,16 @@ from model_config import MODEL_NAME, PQ_NAME, MAX_LENGTH, NUM_LABELS, TOP_K
 from model import TruthfulnessSayer
 from transformers import AutoTokenizer
 from sentence_transformers import SentenceTransformer
-
+from huggingface_hub import hf_hub_download                                                                                                                            
+                                                                                                                                                                         
+REPO = "username/fact-checker-data"
 
 @st.cache_resource
 def load_all():
-    embedder = SentenceTransformer(EMBEDDER, model_kwargs={"dtype": "auto"})
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    weights = os.path.join("checkpoints", f"{MODEL_NAME.rsplit('/', 1)[-1]}__{PQ_NAME}", "best.pt")
+    weights = hf_hub_download(REPO, "best.pt", repo_type="dataset")                                                                                                    
+    index_path = hf_hub_download(REPO, "PQ256.faiss", repo_type="dataset")                                                                                             
+    db_path = hf_hub_download(REPO, "wiki_en.db", repo_type="dataset")
+    
     sayer = TruthfulnessSayer(MODEL_NAME, NUM_LABELS, weights)
     index = faiss.read_index(faiss_path(PQ_NAME))
     faiss.extract_index_ivf(index).nprobe = NPROBE
