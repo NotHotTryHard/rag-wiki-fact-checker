@@ -9,8 +9,8 @@ import torch
 sys.path.append(os.path.join(os.path.dirname(__file__), "rag"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "model"))
 
-from rag_config import DB_PATH, EMBEDDER, QUERY_PROMPT, NPROBE, faiss_path
-from model_config import MODEL_NAME, PQ_NAME, MAX_LENGTH, NUM_LABELS, TOP_K
+from rag_config import EMBEDDER, QUERY_PROMPT, NPROBE
+from model_config import MODEL_NAME, MAX_LENGTH, NUM_LABELS, TOP_K
 from model import TruthfulnessSayer
 from transformers import AutoTokenizer
 from sentence_transformers import SentenceTransformer
@@ -38,7 +38,7 @@ embedder, tokenizer, sayer, index, conn = load_all()
 st.title("Fact Checker")
 st.write("Enter a claim to check its truthfulness against Wikipedia RAG-retrieved evidence.")
 
-claim = st.text_input("Claim")
+claim = st.text_input("Claim", placeholder="e.g. The Eiffel Tower is in Paris")
 
 if st.button("Check") and claim.strip():
     with st.spinner("Searching..."):
