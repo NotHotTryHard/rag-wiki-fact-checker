@@ -776,6 +776,10 @@ def run_demo(claim: str):
 
     return verdict_html, _render_evidence_html(evidence)
 
+print("Loading models and index...")
+_load_runtime()
+print("Runtime ready.")
+
 
 with gr.Blocks(title="RAG Wiki Fact Checker") as demo:
     with gr.Column(elem_id="app-shell"):
