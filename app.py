@@ -1,93 +1,637 @@
 import os
 import sys
 import sqlite3
+import html
+from typing import Dict, List, Tuple
 
-import numpy as np
-import faiss
-import torch
 import gradio as gr
-import pandas as pd
-
-sys.path.append(os.path.join(os.path.dirname(__file__), "rag"))
-sys.path.append(os.path.join(os.path.dirname(__file__), "model"))
-
-from rag_config import EMBEDDER, QUERY_PROMPT, NPROBE
-from model_config import MODEL_NAME, MAX_LENGTH, NUM_LABELS, TOP_K
-from model import TruthfulnessSayer
-from transformers import AutoTokenizer
-from sentence_transformers import SentenceTransformer
-from huggingface_hub import hf_hub_download
 
 
-REPO = "NotHotTryHard/fact-checker-data"
+REPO_URL = "https://github.com/NotHotTryHard/rag-wiki-fact-checker"
+HF_DATASET_REPO = "NotHotTryHard/fact-checker-data"
+TOP_K = 5
+GITHUB_ICON_PATH = (
+    "M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38"
+    " 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94"
+    "-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21"
+    " 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95"
+    " 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82"
+    "a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08"
+    " 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73"
+    " .54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8 8 0 0 0 16 8"
+    "c0-4.42-3.58-8-8-8Z"
+)
+
+RUNTIME: Dict[str, object] = {
+    "loaded": False,
+    "embedder": None,
+    "tokenizer": None,
+    "sayer": None,
+    "index": None,
+    "conn": None,
+    "query_prompt": None,
+    "max_length": None,
+    "top_k": TOP_K,
+}
+
+EXAMPLE_CLAIMS = [
+    'Trump was on Epstein island',
+    "The Eiffel Tower was designed by Gustave Eiffel and is located in Paris, France.",
+    "The Eiffel Tower was designed by Gustavo Fring and is located in Berlin, Germany.",
+]
+
+THEME = gr.themes.Soft(
+    primary_hue="emerald",
+    secondary_hue="amber",
+    neutral_hue="slate",
+    font=[gr.themes.GoogleFont("Space Grotesk"), "ui-sans-serif", "sans-serif"],
+    font_mono=[gr.themes.GoogleFont("IBM Plex Mono"), "ui-monospace", "monospace"],
+)
+
+HERO_HTML = f"""
+<section id="hero-panel">
+  <div class="hero-topline">
+    <div class="hero-kicker">Wikipedia grounded verifier</div>
+    <a class="github-link" href="{REPO_URL}" target="_blank" rel="noreferrer">
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path fill="currentColor" d="{GITHUB_ICON_PATH}"/>
+      </svg>
+      <span>GitHub repo</span>
+    </a>
+  </div>
+  <div class="hero-grid">
+    <div class="hero-copy">
+      <h1>RAG Wiki Fact Checker</h1>
+      <p>Paste a claim and inspect verdict confidence with retrieved evidence snippets.</p>
+    </div>
+    <div class="hero-chip-row">
+      <span class="hero-chip">FAISS IVF + PQ</span>
+      <span class="hero-chip">Wikipedia chunks</span>
+      <span class="hero-chip">HF</span>
+    </div>
+  </div>
+</section>
+"""
+
+PROJECT_SUMMARY_HTML = """
+<div class="workspace-intro project-summary-card">
+  <div class="section-heading">
+    <div class="section-kicker">Project Summary</div>
+    <h2>Retrieval + verifier pipeline for factuality checks.</h2>
+    <p class="project-summary-copy">
+      This demo takes a short claim, retrieves relevant passages from an English
+      Wikipedia dump, and runs a BERT-based verifier over each
+      <code>[claim, evidence]</code> pair. Per-pair logits are maxpooled across top-k chunks:
+      one strong supports/refutes signal is enough to drive the final decision.
+    </p>
+    <div class="formula-line">
+      <span class="formula-key">Truthfulness</span>
+      <span class="formula-eq">=</span>
+      <span class="formula-frac">
+        <span class="formula-num">p(supports)</span>
+        <span class="formula-den">p(supports) + p(refutes)</span>
+      </span>
+    </div>
+    <p class="project-summary-copy">
+      The not-enough-info mass is excluded from this score.
+    </p>
+    <p class="project-summary-copy">
+      Stack: <code>microsoft/harrier-oss-v1-0.6b</code> embeddings,
+      FAISS IVF4096 + PQ256 index (~6.3 GB, 23.7M vectors), English Wikipedia
+      chunks (200 words, overlap 50, title-prepended), and a BERT-family verifier
+      over 5 retrieved chunks with 512-token context per pair.
+    </p>
+  </div>
+  <div class="project-metrics-shell">
+    <div class="project-metrics-label">Embedding Benchmark Snapshot</div>
+    <div class="project-metrics-table-wrap">
+      <table class="project-metrics-table" aria-label="Embedding benchmark">
+        <thead>
+          <tr>
+            <th scope="col">Embedder / Index</th>
+            <th scope="col">Recall@1</th>
+            <th scope="col">Recall@5</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td data-label="Embedder / Index">harrier-270m + PQ160 (4.00 GB)</td>
+            <td data-label="Recall@1">32.5%</td>
+            <td data-label="Recall@5">47.4%</td>
+          </tr>
+          <tr>
+            <td data-label="Embedder / Index">harrier-270m + PQ320 (7.80 GB)</td>
+            <td data-label="Recall@1">34.2%</td>
+            <td data-label="Recall@5">48.2%</td>
+          </tr>
+          <tr>
+            <td data-label="Embedder / Index">harrier-0.6b + PQ128 (3.25 GB)</td>
+            <td data-label="Recall@1">32.5%</td>
+            <td data-label="Recall@5">47.7%</td>
+          </tr>
+          <tr>
+            <td data-label="Embedder / Index">harrier-0.6b + PQ256 (6.29 GB)</td>
+            <td data-label="Recall@1">35.5%</td>
+            <td data-label="Recall@5">50.0%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="project-metrics-cards" aria-hidden="true">
+      <div class="project-metrics-mobile-card">
+        <div class="project-metrics-mobile-model">harrier-270m + PQ160</div>
+        <div class="project-metrics-mobile-stat"><span>Recall@1</span><strong>32.5%</strong></div>
+        <div class="project-metrics-mobile-stat"><span>Recall@5</span><strong>47.4%</strong></div>
+      </div>
+      <div class="project-metrics-mobile-card">
+        <div class="project-metrics-mobile-model">harrier-270m + PQ320</div>
+        <div class="project-metrics-mobile-stat"><span>Recall@1</span><strong>34.2%</strong></div>
+        <div class="project-metrics-mobile-stat"><span>Recall@5</span><strong>48.2%</strong></div>
+      </div>
+      <div class="project-metrics-mobile-card">
+        <div class="project-metrics-mobile-model">harrier-0.6b + PQ256</div>
+        <div class="project-metrics-mobile-stat"><span>Recall@1</span><strong>35.5%</strong></div>
+        <div class="project-metrics-mobile-stat"><span>Recall@5</span><strong>50.0%</strong></div>
+      </div>
+    </div>
+    <p class="project-summary-note">
+      Score reflects support in retrieved evidence, not absolute truth.
+      При слабом retrieval система чаще выдает uncertain.
+    </p>
+  </div>
+</div>
+"""
+
+CSS = """
+:root {
+  color-scheme: light;
+  --paper-ink: #132238;
+  --paper-muted: #5b6b7d;
+  --paper-soft: #708295;
+  --paper-line: rgba(19, 34, 56, 0.12);
+  --paper-panel: rgba(255, 255, 255, 0.9);
+  --paper-panel-strong: rgba(255, 255, 255, 0.97);
+  --paper-shadow: 0 28px 90px rgba(15, 23, 42, 0.12);
+  --paper-blue: #1d4ed8;
+  --paper-teal: #0f766e;
+}
+
+.gradio-container {
+  background:
+    radial-gradient(circle at 12% 12%, rgba(15, 118, 110, 0.18), transparent 24%),
+    radial-gradient(circle at 88% 16%, rgba(37, 99, 235, 0.18), transparent 26%),
+    radial-gradient(circle at 82% 78%, rgba(245, 158, 11, 0.16), transparent 24%),
+    linear-gradient(180deg, #f6f7f1 0%, #eef3f8 58%, #f7efe3 100%);
+  color: var(--paper-ink);
+}
+
+.gradio-container::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(125deg, rgba(255, 255, 255, 0.18), transparent 28%),
+    linear-gradient(305deg, rgba(255, 255, 255, 0.10), transparent 26%);
+  opacity: 0.6;
+  animation: page-float 18s ease-in-out infinite;
+}
+
+@keyframes page-float {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -10px, 0); }
+}
+
+#app-shell {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 22px 18px 44px;
+}
+
+.panel {
+  position: relative;
+  overflow: hidden;
+  padding: 22px;
+  border: 1px solid rgba(68, 64, 60, 0.18);
+  border-radius: 28px;
+  background: linear-gradient(180deg, var(--paper-panel-strong), var(--paper-panel));
+  box-shadow: var(--paper-shadow);
+  backdrop-filter: blur(18px);
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.55), transparent 34%);
+}
+
+#input-panel,
+#result-panel {
+  border-radius: 28px !important;
+  overflow: hidden;
+}
+
+#output-panel {
+  border-radius: 28px !important;
+  overflow: hidden;
+}
+
+#input-panel > div,
+#result-panel > div,
+#output-panel > div {
+  border-radius: 24px !important;
+  overflow: hidden !important;
+}
+
+#input-panel .gr-group,
+#result-panel .gr-group,
+#input-panel .block,
+#result-panel .block,
+#input-panel .form,
+#result-panel .form,
+#input-panel .gr-box,
+#result-panel .gr-box,
+#output-panel .gr-group,
+#output-panel .block,
+#output-panel .form,
+#output-panel .gr-box,
+#output-panel .gr-html,
+#output-panel .gr-markdown {
+  border-radius: 22px !important;
+  overflow: hidden !important;
+}
+
+#hero-panel {
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 14px;
+  padding: 18px 22px;
+  border-radius: 30px;
+  background:
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.84), transparent 34%),
+    linear-gradient(135deg, rgba(15, 118, 110, 0.12) 0%, rgba(37, 99, 235, 0.16) 52%, rgba(245, 158, 11, 0.18) 100%),
+    rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(19, 34, 56, 0.10);
+  box-shadow: 0 24px 70px rgba(37, 99, 235, 0.14);
+}
+
+.hero-topline {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.hero-kicker {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: rgba(19, 34, 56, 0.78);
+}
+
+.hero-copy h1 {
+  margin: 0;
+  font-size: clamp(2.3rem, 4vw, 3.4rem);
+  line-height: 1;
+  letter-spacing: -0.07em;
+}
+
+.hero-copy p {
+  margin: 8px 0 0;
+  max-width: 34rem;
+  color: #556476;
+  font-size: 0.98rem;
+  line-height: 1.45;
+}
+
+.github-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(19, 34, 56, 0.10);
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--paper-ink);
+  text-decoration: none;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.github-link svg {
+  width: 16px;
+  height: 16px;
+}
+
+.hero-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.hero-chip {
+  padding: 9px 13px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(19, 34, 56, 0.09);
+  font-size: 0.9rem;
+}
+
+.section-heading {
+  margin-bottom: 16px;
+}
+
+.section-kicker {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.10);
+  color: var(--paper-teal);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.paper-input-shell {
+  position: relative;
+  z-index: 1;
+  padding: 14px;
+  border-radius: 28px;
+  overflow: hidden;
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 252, 0.94));
+}
+
+#claim-input,
+#claim-input > div,
+#claim-input .form,
+#claim-input .wrap,
+#claim-input .scroll-hide {
+  border-radius: 24px !important;
+}
+
+.paper-input textarea,
+#claim-input textarea,
+.paper-input textarea:focus,
+#claim-input textarea:focus {
+  min-height: 120px !important;
+  border-radius: 24px !important;
+}
+
+.example-menu {
+  display: grid;
+  gap: 10px;
+}
+
+.example-btn button {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 20px !important;
+  justify-content: flex-start;
+  text-align: left;
+  white-space: normal !important;
+  line-height: 1.3;
+}
+
+.evidence-stack {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.evidence-item {
+  border: 1px solid var(--paper-line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 8px 12px;
+}
+
+.evidence-item summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #0f172a;
+  outline: none;
+}
+
+.evidence-item-body {
+  margin-top: 8px;
+  color: #334155;
+  line-height: 1.55;
+}
+
+.project-summary-card {
+  position: relative;
+  overflow: hidden;
+  padding: 24px;
+  border: 1px solid rgba(19, 34, 56, 0.12);
+  border-radius: 30px;
+  background:
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.4), transparent 30%),
+    linear-gradient(145deg, rgba(37, 99, 235, 0.08), rgba(15, 118, 110, 0.06));
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.08);
+}
+
+.project-summary-copy,
+.project-summary-note {
+  color: var(--paper-muted);
+}
+
+.formula-line {
+  margin: 8px auto 12px;
+  text-align: center;
+  color: var(--paper-ink);
+  font-size: 1.02rem;
+  line-height: 1.4;
+}
+
+.formula-key {
+  font-weight: 700;
+}
+
+.formula-eq {
+  margin: 0 8px;
+}
+
+.formula-frac {
+  display: inline-grid;
+  grid-template-rows: auto auto;
+  text-align: center;
+  vertical-align: middle;
+  min-width: 260px;
+}
+
+.formula-num {
+  border-bottom: 1px solid rgba(19, 34, 56, 0.6);
+  padding: 0 8px 2px;
+}
+
+.formula-den {
+  padding: 2px 8px 0;
+}
+
+.project-metrics-shell {
+  margin-top: 18px;
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 820px;
+  padding: 16px;
+  border: 1px solid rgba(19, 34, 56, 0.1);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.project-metrics-label {
+  margin-bottom: 10px;
+  color: var(--paper-blue);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.project-metrics-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 0;
+  border-radius: 0;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.project-metrics-table-wrap {
+  border: 1px solid rgba(19, 34, 56, 0.08);
+  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.9);
+  max-width: 780px;
+  margin: 0 auto;
+}
+
+.project-metrics-cards {
+  display: none;
+}
+
+.project-metrics-table th,
+.project-metrics-table td {
+  padding: 12px 14px;
+  text-align: left;
+  border-bottom: 1px solid rgba(19, 34, 56, 0.08);
+}
+
+.project-metrics-table th + th,
+.project-metrics-table td + td {
+  border-left: 1px solid rgba(19, 34, 56, 0.08);
+}
+
+.project-metrics-table th {
+  background: rgba(15, 118, 110, 0.08);
+  color: var(--paper-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.project-metrics-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.project-metrics-table td:nth-child(2),
+.project-metrics-table td:nth-child(3),
+.project-metrics-table th:nth-child(2),
+.project-metrics-table th:nth-child(3) {
+  text-align: right;
+  width: 18%;
+}
+
+.verdict-card {
+  border-radius: 24px;
+  border: 1px solid var(--paper-line);
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.workspace-row {
+  gap: 16px;
+}
+
+@media (max-width: 960px) {
+  #app-shell {
+    padding: 18px 12px 42px;
+  }
+  .hero-topline {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 640px) {
+  .panel {
+    padding: 18px;
+    border-radius: 24px;
+  }
+  .project-summary-card {
+    padding: 18px;
+    border-radius: 24px;
+  }
+  .project-metrics-shell {
+    padding: 12px;
+  }
+  .project-metrics-table-wrap {
+    display: none;
+  }
+  .project-metrics-cards {
+    display: grid;
+    gap: 10px;
+  }
+  .project-metrics-mobile-card {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid rgba(19, 34, 56, 0.08);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+  }
+  .project-metrics-mobile-model {
+    font-size: 0.98rem;
+    font-weight: 700;
+    line-height: 1.35;
+  }
+  .project-metrics-mobile-stat {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(19, 34, 56, 0.08);
+    font-size: 0.9rem;
+    align-items: center;
+  }
+  .project-metrics-mobile-stat span {
+    color: var(--paper-soft);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+}
+"""
 
 
-def load_all():
-    weights = hf_hub_download(REPO, "best.pt", repo_type="dataset")
-    index_path = hf_hub_download(REPO, "PQ256.faiss", repo_type="dataset")
-    db_path = hf_hub_download(REPO, "wiki_en.db", repo_type="dataset")
-
-    embedder = SentenceTransformer(EMBEDDER)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    sayer = TruthfulnessSayer(MODEL_NAME, NUM_LABELS, weights)
-
-    index = faiss.read_index(index_path)
-    faiss.extract_index_ivf(index).nprobe = NPROBE
-
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    return embedder, tokenizer, sayer, index, conn
-
-
-print("Loading models and index...")
-EMBEDDER_MODEL, TOKENIZER, SAYER, INDEX, CONN = load_all()
-print("Ready.")
-
-
-# --------------------------------------------------------------------------
-# Core inference
-# --------------------------------------------------------------------------
-def run_fact_check(claim: str):
-    """Returns (score in [0,1], evidence_texts: list[str])."""
-    query_emb = EMBEDDER_MODEL.encode(
-        [claim],
-        prompt_name=QUERY_PROMPT,
-        normalize_embeddings=True,
-    ).astype(np.float32)
-
-    _, ids_found = INDEX.search(query_emb, TOP_K)
-    chunk_ids = [i for i in ids_found[0].tolist() if i >= 0]
-
-    evidence_texts = []
-    if chunk_ids:
-        ph = ",".join("?" * len(chunk_ids))
-        rows = CONN.execute(
-            f"SELECT id, chunk FROM chunks WHERE id IN ({ph})", chunk_ids
-        ).fetchall()
-        id_to_text = {r[0]: r[1] for r in rows}
-        evidence_texts = [id_to_text.get(i, "") for i in chunk_ids]
-
-    while len(evidence_texts) < TOP_K:
-        evidence_texts.append("")
-
-    pairs = TOKENIZER(
-        [claim] * TOP_K,
-        evidence_texts,
-        truncation=True,
-        max_length=MAX_LENGTH,
-        padding="longest",
-        return_tensors="pt",
-    )
-    input_ids = pairs["input_ids"].unsqueeze(0)
-    attention_mask = pairs["attention_mask"].unsqueeze(0)
-
-    with torch.no_grad():
-        score = SAYER(input_ids, attention_mask).item()
-
-    return score, evidence_texts
-
-
-def score_to_verdict(score: float):
-    """Map truthfulness score to (label, color)."""
+def score_to_verdict(score: float) -> Tuple[str, str]:
     if score >= 0.75:
         return "Likely TRUE", "#16a34a"
     if score <= 0.25:
@@ -95,273 +639,212 @@ def score_to_verdict(score: float):
     return "Uncertain", "#d97706"
 
 
-READY_HTML = (
-    "<div class='verdict-card'>"
-    "<div class='verdict-label' style='color:#64748b;'>Ready</div>"
-    "<div class='verdict-caption'>Enter a claim and click Check.</div>"
-    "</div>"
-)
+def _load_runtime() -> Dict[str, object]:
+    if RUNTIME["loaded"]:
+        return RUNTIME
+
+    base_dir = os.path.dirname(__file__)
+    sys.path.append(os.path.join(base_dir, "rag"))
+    sys.path.append(os.path.join(base_dir, "model"))
+
+    from rag_config import EMBEDDER, QUERY_PROMPT, NPROBE
+    from model_config import MODEL_NAME, MAX_LENGTH, NUM_LABELS, TOP_K as MODEL_TOP_K
+    from model import TruthfulnessSayer
+
+    import numpy as np
+    import faiss
+    import torch
+    from transformers import AutoTokenizer
+    from sentence_transformers import SentenceTransformer
+    from huggingface_hub import hf_hub_download
+
+    weights = hf_hub_download(HF_DATASET_REPO, "best.pt", repo_type="dataset")
+    index_path = hf_hub_download(HF_DATASET_REPO, "PQ256.faiss", repo_type="dataset")
+    db_path = hf_hub_download(HF_DATASET_REPO, "wiki_en.db", repo_type="dataset")
+
+    embedder = SentenceTransformer(EMBEDDER)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    sayer = TruthfulnessSayer(MODEL_NAME, NUM_LABELS, weights)
+
+    index = faiss.read_index(index_path)
+    faiss.extract_index_ivf(index).nprobe = NPROBE
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+
+    RUNTIME.update(
+        {
+            "loaded": True,
+            "embedder": embedder,
+            "tokenizer": tokenizer,
+            "sayer": sayer,
+            "index": index,
+            "conn": conn,
+            "query_prompt": QUERY_PROMPT,
+            "max_length": MAX_LENGTH,
+            "top_k": MODEL_TOP_K,
+            "np": np,
+            "torch": torch,
+        }
+    )
+    return RUNTIME
 
 
-def format_verdict_html(score: float) -> str:
+def _run_real_fact_check(claim: str) -> Tuple[float, List[str]]:
+    rt = _load_runtime()
+
+    np = rt["np"]
+    torch = rt["torch"]
+    query_emb = rt["embedder"].encode(
+        [claim], prompt_name=rt["query_prompt"], normalize_embeddings=True
+    ).astype(np.float32)
+
+    _, ids_found = rt["index"].search(query_emb, rt["top_k"])
+    chunk_ids = [i for i in ids_found[0].tolist() if i >= 0]
+
+    evidence_texts: List[str] = []
+    if chunk_ids:
+        placeholders = ",".join("?" * len(chunk_ids))
+        rows = rt["conn"].execute(
+            f"SELECT id, chunk FROM chunks WHERE id IN ({placeholders})", chunk_ids
+        ).fetchall()
+        id_to_text = {row[0]: row[1] for row in rows}
+        evidence_texts = [id_to_text.get(i, "") for i in chunk_ids]
+
+    while len(evidence_texts) < rt["top_k"]:
+        evidence_texts.append("")
+
+    pairs = rt["tokenizer"](
+        [claim] * rt["top_k"],
+        evidence_texts,
+        truncation=True,
+        max_length=rt["max_length"],
+        padding="longest",
+        return_tensors="pt",
+    )
+    input_ids = pairs["input_ids"].unsqueeze(0)
+    attention_mask = pairs["attention_mask"].unsqueeze(0)
+
+    with torch.no_grad():
+        score = rt["sayer"](input_ids, attention_mask).item()
+
+    return float(score), evidence_texts
+
+
+def _render_evidence_html(evidence: List[str]) -> str:
+    items: List[str] = []
+    for idx, text in enumerate(evidence, start=1):
+        clean = (text or "").strip()
+        if not clean:
+            continue
+        first_line = clean.splitlines()[0].strip()
+        if len(first_line) > 140:
+            first_line = first_line[:137] + "..."
+        body = html.escape(clean).replace("\n", "<br>")
+        items.append(
+            "<details class='evidence-item'>"
+            f"<summary>Chunk #{idx}: {html.escape(first_line)}</summary>"
+            f"<div class='evidence-item-body'>{body}</div>"
+            "</details>"
+        )
+
+    if not items:
+        return (
+            "<div class='evidence-stack'>"
+            "<div class='evidence-item'><summary>No evidence retrieved.</summary></div>"
+            "</div>"
+        )
+
+    return "<div class='evidence-stack'>" + "".join(items) + "</div>"
+
+
+def run_demo(claim: str):
+    claim = (claim or "").strip()
+    if not claim:
+        return (
+            "<div class='verdict-card'><b>Waiting for input...</b></div>",
+            _render_evidence_html([]),
+        )
+
+    score, evidence = _run_real_fact_check(claim)
+
     label, color = score_to_verdict(score)
-    pct = f"{score * 100:.1f}%"
-    return (
+    verdict_html = (
         "<div class='verdict-card'>"
-        f"<div class='verdict-label' style='color:{color};'>{label}</div>"
-        f"<div class='verdict-score'>{pct}</div>"
-        "<div class='verdict-caption'>truthfulness = p(supports) / (p(supports) + p(refutes))</div>"
+        f"<div style='font-size:18px;font-weight:700;color:{color};'>{label}</div>"
+        f"<div style='margin-top:6px;color:#334155;'>Truthfulness score: <b>{score:.3f}</b></div>"
         "</div>"
     )
 
-
-def format_evidence_markdown(evidence_texts) -> str:
-    blocks = []
-    for i, ev in enumerate(evidence_texts, start=1):
-        if not ev:
-            continue
-        blocks.append(f"**Evidence {i}**\n\n{ev}\n\n---")
-    return "\n".join(blocks) if blocks else "_No evidence retrieved._"
+    return verdict_html, _render_evidence_html(evidence)
 
 
-# --------------------------------------------------------------------------
-# Gradio callbacks
-# --------------------------------------------------------------------------
-def history_to_dataframe(history) -> pd.DataFrame:
-    if not history:
-        return pd.DataFrame(columns=["#", "Claim", "Verdict", "Score"])
-    rows = []
-    for i, item in enumerate(reversed(history), start=1):
-        claim_preview = item["claim"]
-        if len(claim_preview) > 90:
-            claim_preview = claim_preview[:87] + "..."
-        rows.append(
-            {
-                "#": i,
-                "Claim": claim_preview,
-                "Verdict": item["label"],
-                "Score": f"{item['score'] * 100:.1f}%",
-            }
-        )
-    return pd.DataFrame(rows)
+with gr.Blocks(title="RAG Wiki Fact Checker") as demo:
+    with gr.Column(elem_id="app-shell"):
+        gr.HTML(HERO_HTML)
 
+        with gr.Row(equal_height=True, elem_classes=["workspace-row"]):
+            with gr.Column(scale=8):
+                with gr.Group(elem_id="input-panel", elem_classes=["panel"]):
+                    gr.HTML(
+                        """
+                        <div class="section-heading">
+                          <div class="section-kicker">Interactive Playground</div>
+                        </div>
+                        """
+                    )
+                    with gr.Column(elem_classes=["paper-input-shell"]):
+                        claim = gr.Textbox(
+                            label="Claim",
+                            placeholder="Введите утверждение для проверки...",
+                            lines=2,
+                            elem_id="claim-input",
+                            elem_classes=["paper-input"],
+                        )
+                    with gr.Row():
+                        run_btn = gr.Button("Check claim", variant="primary")
 
-def on_check(claim: str, history):
-    claim = (claim or "").strip()
-    history = history or []
-    if not claim:
-        return READY_HTML, "_No evidence yet._", history, history_to_dataframe(history)
+            with gr.Column(scale=4):
+                with gr.Group(elem_id="result-panel", elem_classes=["panel"]):
+                    gr.HTML(
+                        """
+                        <div class="section-heading">
+                          <div class="section-kicker">Examples</div>
+                        </div>
+                        """
+                    )
+                    with gr.Column(elem_classes=["example-menu"]):
+                        ex1_btn = gr.Button(EXAMPLE_CLAIMS[0], elem_classes=["example-btn"])
+                        ex2_btn = gr.Button(EXAMPLE_CLAIMS[1], elem_classes=["example-btn"])
+                        ex3_btn = gr.Button(EXAMPLE_CLAIMS[2], elem_classes=["example-btn"])
 
-    score, evidence_texts = run_fact_check(claim)
-    verdict_html = format_verdict_html(score)
-    evidence_md = format_evidence_markdown(evidence_texts)
+        with gr.Row():
+            with gr.Column(scale=12):
+                with gr.Group(elem_id="output-panel", elem_classes=["panel"]):
+                    gr.HTML(
+                        """
+                        <div class="section-heading">
+                          <div class="section-kicker">Result</div>
+                        </div>
+                        """
+                    )
+                    verdict = gr.HTML("<div class='verdict-card'><b>Waiting for input...</b></div>")
+                    evidence = gr.HTML(_render_evidence_html([]))
 
-    label, _ = score_to_verdict(score)
-    history = history + [
-        {
-            "claim": claim,
-            "score": score,
-            "label": label,
-            "evidence": evidence_texts,
-        }
-    ]
-    return verdict_html, evidence_md, history, history_to_dataframe(history)
+        gr.HTML(PROJECT_SUMMARY_HTML)
 
-
-def on_clear_history():
-    return [], history_to_dataframe([]), READY_HTML, "_No evidence yet._"
-
-
-# --------------------------------------------------------------------------
-# Static content
-# --------------------------------------------------------------------------
-SUMMARY_MD = """
-### Wikipedia-grounded fact checking with RAG + BERT verifier.
-
-This demo takes a short claim, retrieves the most relevant passages from an English Wikipedia
-dump, and runs a BERT-based verifier over each `[claim, evidence]` pair. The per-pair logits
-are maxpooled across the top-k retrieved chunks — one confident *supports* or *refutes* signal
-is enough to drive the final decision — and the truthfulness score is computed as
-`p(supports) / (p(supports) + p(refutes))`, ignoring the *not-enough-info* mass.
-
-**Stack.** Embedder: `microsoft/harrier-oss-v1-0.6b` · Index: FAISS IVF4096 + PQ256
-(~6.3 GB, 23.7M vectors) · Corpus: English Wikipedia, 200-word chunks with 50-word overlap,
-title prepended as an extra signal · Verifier: BERT-family model over 5 retrieved chunks,
-512-token context per pair.
-
-_The score reflects how well the claim is supported by the retrieved Wikipedia evidence —
-it's a grounded signal, not absolute truth. When evidence is weak the model leans toward
-"uncertain"._
-"""
-
-BENCHMARK_DF = pd.DataFrame(
-    [
-        ["harrier-270m", "PQ160", "4.00 GB", "32.5%", "44.3%", "47.4%"],
-        ["harrier-270m", "PQ320", "7.80 GB", "34.2%", "45.6%", "48.2%"],
-        ["harrier-0.6b", "PQ128", "3.25 GB", "32.5%", "44.6%", "47.7%"],
-        ["harrier-0.6b", "PQ256 ★", "6.29 GB", "35.5%", "47.3%", "50.0%"],
-    ],
-    columns=["Embedder", "Index", "Size", "Recall@1", "Recall@3", "Recall@5"],
-)
-
-QUICK_EXAMPLES = [
-    "The Eiffel Tower was designed by Gustave Eiffel and is located in Paris, France.",
-    "Mount Everest is the tallest mountain in the world and lies on the border between Nepal and China.",
-]
-
-
-# --------------------------------------------------------------------------
-# UI
-# --------------------------------------------------------------------------
-CUSTOM_CSS = """
-.gradio-container { max-width: 1200px !important; }
-
-.hero {
-    padding: 28px 32px;
-    border-radius: 18px;
-    background: linear-gradient(135deg, #eef2ff 0%, #f0f9ff 50%, #fef3c7 100%);
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    margin-bottom: 16px;
-}
-.hero-tag {
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    font-size: 12px;
-    color: #475569;
-    font-weight: 600;
-}
-.hero-title {
-    font-size: 32px;
-    font-weight: 700;
-    margin: 6px 0 4px 0;
-    color: #0f172a;
-}
-.hero-sub {
-    color: #475569;
-    font-size: 15px;
-}
-
-.section-tag {
-    display: inline-block;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    font-size: 11px;
-    font-weight: 600;
-    color: #475569;
-    background: #e2e8f0;
-    padding: 4px 10px;
-    border-radius: 999px;
-    margin-bottom: 8px;
-}
-
-.verdict-card {
-    padding: 20px;
-    border-radius: 14px;
-    background: #f8fafc;
-    border: 1px solid rgba(148, 163, 184, 0.3);
-    text-align: center;
-    min-height: 160px;
-}
-.verdict-label {
-    font-size: 13px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 8px;
-}
-.verdict-score {
-    font-size: 40px;
-    font-weight: 700;
-    color: #0f172a;
-    margin: 4px 0;
-}
-.verdict-caption {
-    font-size: 12px;
-    color: #64748b;
-    margin-top: 6px;
-}
-"""
-
-with gr.Blocks(theme=gr.themes.Soft(), css=CUSTOM_CSS, title="Fact Checker") as demo:
-    history_state = gr.State([])
-
-    # Hero
-    gr.HTML(
-        """
-        <div class="hero">
-            <div class="hero-tag">RAG Fact Checker</div>
-            <div class="hero-title">Fact Checker</div>
-            <div class="hero-sub">Paste a claim and get a truthfulness score grounded in Wikipedia evidence.</div>
-        </div>
-        """
+    run_btn.click(
+        fn=run_demo,
+        inputs=[claim],
+        outputs=[verdict, evidence],
     )
-
-    # Project summary + benchmark
-    with gr.Group():
-        gr.HTML('<div class="section-tag">Project Summary</div>')
-        gr.Markdown(SUMMARY_MD)
-        with gr.Accordion("Retrieval benchmark (FEVER, 45 033 claims)", open=False):
-            gr.Dataframe(value=BENCHMARK_DF, interactive=False, wrap=True)
-            gr.Markdown(
-                "_The ★ row is the configuration used in this demo. PQ256 on the 0.6b "
-                "embedder gives the best recall/size trade-off that still fits in RAM._"
-            )
-
-    gr.Markdown("")  # spacer
-
-    # Working area
-    with gr.Row():
-        with gr.Column(scale=2):
-            gr.HTML('<div class="section-tag">Claim</div>')
-            claim_box = gr.Textbox(
-                placeholder="e.g. The Eiffel Tower is in Paris",
-                lines=5,
-                show_label=False,
-            )
-            with gr.Row():
-                check_btn = gr.Button("Check", variant="primary", scale=2)
-                clear_btn = gr.Button("Clear history", scale=1)
-
-            gr.HTML('<div class="section-tag" style="margin-top:12px;">Quick examples</div>')
-            with gr.Row():
-                ex_buttons = []
-                for ex in QUICK_EXAMPLES:
-                    preview = ex if len(ex) <= 60 else ex[:57] + "..."
-                    ex_buttons.append(gr.Button(preview, size="sm"))
-
-        with gr.Column(scale=1):
-            gr.HTML('<div class="section-tag">Verdict</div>')
-            verdict_out = gr.HTML(value=READY_HTML)
-
-    # Evidence
-    with gr.Group():
-        gr.HTML('<div class="section-tag">Retrieved evidence</div>')
-        evidence_out = gr.Markdown("_No evidence yet._")
-
-    # Session log
-    with gr.Group():
-        gr.HTML('<div class="section-tag">Session log</div>')
-        gr.Markdown("Every submission is kept for the duration of your session.")
-        history_table = gr.Dataframe(
-            value=history_to_dataframe([]),
-            interactive=False,
-            wrap=True,
-        )
-
-    # Wiring
-    check_btn.click(
-        fn=on_check,
-        inputs=[claim_box, history_state],
-        outputs=[verdict_out, evidence_out, history_state, history_table],
+    claim.submit(
+        fn=run_demo,
+        inputs=[claim],
+        outputs=[verdict, evidence],
     )
-    clear_btn.click(
-        fn=on_clear_history,
-        inputs=None,
-        outputs=[history_state, history_table, verdict_out, evidence_out],
-    )
-    for btn, ex in zip(ex_buttons, QUICK_EXAMPLES):
-        btn.click(fn=lambda ex=ex: ex, inputs=None, outputs=claim_box)
+    ex1_btn.click(fn=lambda: EXAMPLE_CLAIMS[0], outputs=[claim])
+    ex2_btn.click(fn=lambda: EXAMPLE_CLAIMS[1], outputs=[claim])
+    ex3_btn.click(fn=lambda: EXAMPLE_CLAIMS[2], outputs=[claim])
 
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(css=CSS, theme=THEME)
