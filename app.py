@@ -564,6 +564,83 @@ CSS = """
   background: rgba(255, 255, 255, 0.86);
 }
 
+.verdict-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 168px;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.verdict-main {
+  min-width: 0;
+}
+
+.verdict-side {
+  border-radius: 20px;
+  display: grid;
+  align-content: center;
+  justify-items: end;
+  text-align: right;
+}
+
+.verdict-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.verdict-metrics-row {
+  margin-top: 10px;
+}
+
+.truth-slider {
+  display: grid;
+  gap: 6px;
+}
+
+.truth-slider-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  color: var(--paper-soft);
+}
+
+.truth-slider-track {
+  position: relative;
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #dc2626 0%, #f59e0b 45%, #16a34a 100%);
+  box-shadow: inset 0 0 0 1px rgba(19, 34, 56, 0.12);
+}
+
+.truth-slider-thumb {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 10px rgba(2, 6, 23, 0.28);
+  background: #0f172a;
+}
+
+.groundedness-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--paper-soft);
+}
+
+.groundedness-value {
+  margin-top: 2px;
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--paper-ink);
+}
+
 .workspace-row {
   gap: 16px;
 }
@@ -586,6 +663,13 @@ CSS = """
   .project-summary-card {
     padding: 18px;
     border-radius: 24px;
+  }
+  .verdict-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .verdict-side {
+    justify-items: start;
+    text-align: left;
   }
   .project-metrics-shell {
     padding: 12px;
@@ -688,7 +772,7 @@ def _load_runtime() -> Dict[str, object]:
     return RUNTIME
 
 
-def _run_real_fact_check(claim: str) -> Tuple[float, List[str]]:
+def _run_real_fact_check(claim: str) -> Tuple[float, float, List[str]]:
     rt = _load_runtime()
 
     np = rt["np"]
@@ -724,9 +808,11 @@ def _run_real_fact_check(claim: str) -> Tuple[float, List[str]]:
     attention_mask = pairs["attention_mask"].unsqueeze(0)
 
     with torch.no_grad():
-        score = rt["sayer"](input_ids, attention_mask).item()
+        truthfulness, groundedness, _, _, _ = rt["sayer"].predict_components(
+            input_ids, attention_mask
+        )
 
-    return float(score), evidence_texts
+    return float(truthfulness.item()), float(groundedness.item()), evidence_texts
 
 
 def _render_evidence_html(evidence: List[str]) -> str:
@@ -761,20 +847,44 @@ def run_demo(claim: str):
     if not claim:
         return (
             "<div class='verdict-card'><b>Waiting for input...</b></div>",
+            "<div class='verdict-card verdict-side'></div>",
             _render_evidence_html([]),
         )
 
-    score, evidence = _run_real_fact_check(claim)
+    score, groundedness, evidence = _run_real_fact_check(claim)
 
     label, color = score_to_verdict(score)
-    verdict_html = (
-        "<div class='verdict-card'>"
-        f"<div style='font-size:18px;font-weight:700;color:{color};'>{label}</div>"
-        f"<div style='margin-top:6px;color:#334155;'>Truthfulness score: <b>{score:.3f}</b></div>"
+    slider_pos = max(0.0, min(100.0, score * 100.0))
+    slider_html = (
+        "<div class='verdict-card verdict-main'>"
+        f"<div class='verdict-title' style='color:{color};'>{label}</div>"
+        "<div class='truth-slider'>"
+        "<div class='truth-slider-labels'><span>FALSE</span><span>TRUE</span></div>"
+        "<div class='truth-slider-track'>"
+        f"<div class='truth-slider-thumb' style='left:{slider_pos:.1f}%;'></div>"
+        "</div>"
+        f"<div style='font-size:0.82rem;color:#334155;'>Truthfulness: <b>{score:.3f}</b></div>"
+        "</div>"
+        "</div>"
+    )
+    g_pct = groundedness * 100
+    if g_pct >= 70:
+        g_label, g_color = "Strong", "#16a34a"
+    elif g_pct >= 40:
+        g_label, g_color = "Moderate", "#d97706"
+    else:
+        g_label, g_color = "Weak", "#dc2626"
+
+    ground_html = (
+        "<div class='verdict-card verdict-side' style='text-align:center;'>"
+        f"<div style='font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;"
+        f"font-weight:600;color:{g_color};'>{g_label}</div>"
+        f"<div style='font-size:2rem;font-weight:700;color:{g_color};margin:6px 0;'>{g_pct:.0f}%</div>"
+        "<div style='font-size:0.75rem;color:#64748b;'>Groundedness</div>"
         "</div>"
     )
 
-    return verdict_html, _render_evidence_html(evidence)
+    return slider_html, ground_html, _render_evidence_html(evidence)
 
 print("Loading models and index...")
 _load_runtime()
@@ -830,7 +940,11 @@ with gr.Blocks(title="RAG Wiki Fact Checker") as demo:
                         </div>
                         """
                     )
-                    verdict = gr.HTML("<div class='verdict-card'><b>Waiting for input...</b></div>")
+                    with gr.Row():
+                        with gr.Column(scale=3):
+                            verdict_slider = gr.HTML("<div class='verdict-card'><b>Waiting for input...</b></div>")
+                        with gr.Column(scale=1, min_width=120):
+                            verdict_ground = gr.HTML("<div class='verdict-card verdict-side'></div>")
                     evidence = gr.HTML(_render_evidence_html([]))
 
         gr.HTML(PROJECT_SUMMARY_HTML)
@@ -838,12 +952,12 @@ with gr.Blocks(title="RAG Wiki Fact Checker") as demo:
     run_btn.click(
         fn=run_demo,
         inputs=[claim],
-        outputs=[verdict, evidence],
+        outputs=[verdict_slider, verdict_ground, evidence],
     )
     claim.submit(
         fn=run_demo,
         inputs=[claim],
-        outputs=[verdict, evidence],
+        outputs=[verdict_slider, verdict_ground, evidence],
     )
     ex1_btn.click(fn=lambda: EXAMPLE_CLAIMS[0], outputs=[claim])
     ex2_btn.click(fn=lambda: EXAMPLE_CLAIMS[1], outputs=[claim])
