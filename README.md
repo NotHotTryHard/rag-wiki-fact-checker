@@ -7,6 +7,7 @@ sdk_version: 6.11.0
 app_file: app.py
 pinned: false
 ---
+[ОТЧЁТ](report.pdf)
 
 # RAG Wiki Fact Checker
 
